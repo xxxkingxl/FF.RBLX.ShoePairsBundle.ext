@@ -1,0 +1,52 @@
+async function getJSON(url) {
+  const r = await fetch(url, { credentials: "include" });
+  if (!r.ok) throw new Error(url + " -> " + r.status);
+  return r.json();
+}
+
+async function loadFavoriteBundles() {
+  const me = await getJSON("https://users.roblox.com/v1/users/authenticated");
+  const seen = new Map();
+  for (const subtype of [1, 2, 3, 4, 5]) {
+    let cursor = null;
+    do {
+      let url = `https://catalog.roblox.com/v1/favorites/users/${me.id}/favorites/${subtype}/bundles?limit=30`;
+      if (cursor) url += "&cursor=" + encodeURIComponent(cursor);
+      let data;
+      try { data = await getJSON(url); } catch (e) { break; }
+      for (const b of data.favorites || []) {
+        seen.set(b.id, {
+          id: b.id,
+          name: b.name,
+          type: b.bundleType || "Other",
+          creator: b.creator ? b.creator.name : "",
+          price: b.product ? b.product.priceInRobux : null,
+          forSale: b.product ? b.product.isForSale : false,
+          thumb: null
+        });
+      }
+      cursor = data.moreFavorites ? data.nextCursor : null;
+    } while (cursor);
+  }
+  const all = [...seen.values()];
+
+  // thumbnails, in batches of 50
+  for (let i = 0; i < all.length; i += 50) {
+    const batch = all.slice(i, i + 50);
+    try {
+      const t = await getJSON(
+        "https://thumbnails.roblox.com/v1/bundles/thumbnails?size=150x150&format=Png&bundleIds=" +
+          batch.map(b => b.id).join(",")
+      );
+      for (const item of t.data || []) {
+        const b = batch.find(x => x.id === item.targetId);
+        if (b && item.imageUrl) b.thumb = item.imageUrl;
+      }
+    } catch (e) { /* cards just show without images */ }
+  }
+  return all;
+}
+
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "getFavoriteBundles") return loadFavoriteBundles();
+});
